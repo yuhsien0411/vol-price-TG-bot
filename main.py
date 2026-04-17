@@ -1,8 +1,8 @@
 """
 Bybit 永續合約異常通知機器人
 觸發條件（5m / 1h / 1d 各自判斷）：
-  1. 最新已收 K 線成交量 >= 前一根已收 K 線成交量的 5 倍
-  2. 最新已收 K 線漲跌幅（開盤→收盤）絕對值 >= 10%
+  1. 最新已收 K 線漲跌幅（開盤→收盤）絕對值 >= 10%
+  2. 最新已收 K 線漲跌幅絕對值 >= 5% 且成交量 >= 前一根已收 K 線的 10 倍
 播報時機：
   - 5m K：每 5 分鐘整（:00, :05, :10 ...）
   - 1h K：每小時整點（xx:00）
@@ -11,6 +11,7 @@ Bybit 永續合約異常通知機器人
 
 import asyncio
 import logging
+import time as _time
 import aiohttp
 from apscheduler.schedulers.blocking import BlockingScheduler
 
@@ -28,7 +29,28 @@ logger = logging.getLogger(__name__)
 # 去重記憶：{"{symbol}_{interval_label}": candle_start_time}
 _alerted: dict[str, str] = {}
 
+
+def _find_prev_candles(
+    klines: list, interval_ms: int
+) -> tuple[list | None, list | None]:
+    """
+    依照當前 UTC 時間計算預期的上一根已收盤 K 棒 startTime，
+    從 klines 中找到正確的 curr 與 prev，避免時間競態。
+    回傳 (curr, prev)，找不到時回傳 (None, None)。
+    """
+    now_ms = int(_time.time() * 1000)
+    expected_start = (now_ms // interval_ms) * interval_ms - interval_ms
+
+    for i, k in enumerate(klines):
+        if int(k[0]) == expected_start:
+            if i + 1 < len(klines):
+                return k, klines[i + 1]
+            return None, None
+
+    return None, None
+
 TG_MAX_CHARS = 3800  # Telegram 限制 4096，留緩衝
+REQUEST_DELAY_SEC = 5
 
 
 def _fmt_pct(value: float) -> str:
@@ -101,12 +123,10 @@ async def scan(target_intervals: list[dict]) -> None:
                 if len(klines) < 3:
                     continue
 
-                # 僅使用「已收盤」K 線比較：
-                # - curr: 最新一根已收
-                # - prev: 再前一根已收
-                # klines[0] 是目前形成中的 K（可能未收），故不納入判斷
-                curr = klines[1]
-                prev = klines[2]
+                # 以預期 startTime 定位已收盤 K 棒，避免整點邊界競態
+                curr, prev = _find_prev_candles(klines, interval_cfg["interval_ms"])
+                if curr is None or prev is None:
+                    continue
 
                 curr_vol    = float(curr[5])
                 prev_vol    = float(prev[5])
@@ -146,14 +166,14 @@ async def scan(target_intervals: list[dict]) -> None:
                 dual_mark    = "🔥" if cond1 and cond2 else ("⚡" if cond1 else "")
 
                 # 彙整邏輯：
-                # - 成交量列表：僅 cond1 成立的列（成交量 + 價格 >=5%）
-                # - 價格列表：cond1 或 cond2 都放進來（價格 >=5% 且量大，或價格 >=10%）
+                # - 成交量列表：僅 cond1 成立的列（價格 >=5% 且量 >=10x）
+                # - 價格列表：僅 cond2 成立的列（價格 >=10%）
                 if cond1 and enable_volume:
                     buckets[label]["volume"].append(
                         f"{dual_mark}{symbol}  {vol_ratio:.1f}x"
                         f"   {curr_close}  {curr_chg_str}  24h {chg24h_str}"
                     )
-                if cond1 or cond2:
+                if cond2:
                     buckets[label]["price"].append(
                         f"{dual_mark}{symbol}  {pct_str}"
                         f"  {curr_open}→{curr_close}  24h {chg24h_str}"
@@ -169,7 +189,7 @@ async def scan(target_intervals: list[dict]) -> None:
                     continue
                 msgs = _build_summaries(label, kind, rows)
                 for msg in msgs:
-                    send_message(msg)
+                    await send_message(session, msg)
                 logger.info("已發送 %s %s 彙整（%d 個幣，%d 則）", label, kind, len(rows), len(msgs))
 
     logger.info("掃描完成")
@@ -182,14 +202,17 @@ _CFG_1D = next(c for c in INTERVALS if c["label"] == "1d")
 
 
 def run_5m() -> None:
+    _time.sleep(REQUEST_DELAY_SEC)
     asyncio.run(scan([_CFG_5M]))
 
 
 def run_1h() -> None:
+    _time.sleep(REQUEST_DELAY_SEC)
     asyncio.run(scan([_CFG_1H]))
 
 
 def run_1d() -> None:
+    _time.sleep(REQUEST_DELAY_SEC)
     asyncio.run(scan([_CFG_1D]))
 
 
@@ -210,5 +233,11 @@ if __name__ == "__main__":
     logger.info("  1h K：每小時整點")
     logger.info("  1d K：每日 00:00")
     logger.info("啟動不立即播報，等待下一次排程時間...")
+    logger.info("按 Ctrl+C 可安全結束程式")
 
-    scheduler.start()
+    try:
+        scheduler.start()
+    except KeyboardInterrupt:
+        logger.info("收到 Ctrl+C，正在關閉排程器...")
+        scheduler.shutdown(wait=False)
+        logger.info("已結束")
