@@ -1,8 +1,8 @@
 """
 Bybit 永續合約異常通知機器人
 觸發條件（5m / 1h / 1d 各自判斷）：
-  1. 目前 K 線成交量 >= 前一根已收 K 線成交量的 5 倍
-  2. 目前 K 線漲跌幅（開盤→現價）絕對值 >= 10%
+  1. 最新已收 K 線成交量 >= 前一根已收 K 線成交量的 5 倍
+  2. 最新已收 K 線漲跌幅（開盤→收盤）絕對值 >= 10%
 播報時機：
   - 5m K：每 5 分鐘整（:00, :05, :10 ...）
   - 1h K：每小時整點（xx:00）
@@ -98,11 +98,15 @@ async def scan(target_intervals: list[dict]) -> None:
             triggered_count = 0
             for symbol in symbols:
                 klines = klines_map.get(symbol, [])
-                if len(klines) < 2:
+                if len(klines) < 3:
                     continue
 
-                curr = klines[0]  # 目前這根（可能未收）
-                prev = klines[1]  # 前一根已收
+                # 僅使用「已收盤」K 線比較：
+                # - curr: 最新一根已收
+                # - prev: 再前一根已收
+                # klines[0] 是目前形成中的 K（可能未收），故不納入判斷
+                curr = klines[1]
+                prev = klines[2]
 
                 curr_vol    = float(curr[5])
                 prev_vol    = float(prev[5])
