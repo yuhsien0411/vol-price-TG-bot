@@ -16,7 +16,7 @@ INTERVALS = [
 ]
 
 VOL_MULTIPLIER: float = 5.0          # 成交量異常門檻（倍）（條件1）
-PRICE_CHANGE_THRESHOLD: float = 0.05  # 價格波動門檻（5%，條件1用）
+PRICE_CHANGE_THRESHOLD: float = 0.02  # 價格波動門檻（2%，條件1用）
 PRICE_CHANGE_STRONG: float = 0.10     # 價格波動門檻（10%，條件2用）
 CONCURRENCY: int = 30                 # 同時發出的 API 請求數
 
