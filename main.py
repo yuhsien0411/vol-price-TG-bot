@@ -1,12 +1,10 @@
 """
 Bybit 永續合約異常通知機器人
-觸發條件（15m / 1h / 1d 各自判斷）：
+觸發條件（1h K 線判斷）：
   1. 最新已收 K 線漲跌幅（開盤→收盤）絕對值 >= 10%
   2. 最新已收 K 線漲跌幅絕對值 >= 5% 且成交量 >= 前一根已收 K 線的 10 倍
 播報時機：
-  - 15m K：每 15 分鐘整（:00, :15, :30, :45）
-  - 1h K：每小時整點（xx:00）
-  - 1d K：每日 00:00（Asia/Taipei）
+  - 1h K：每小時整點（xx:00，Asia/Taipei）
 """
 
 import asyncio
@@ -96,7 +94,7 @@ def _build_summaries(label: str, kind: str, rows: list[str]) -> list[str]:
 async def scan(target_intervals: list[dict]) -> None:
     """
     掃描指定週期清單，抓 K 線 → 判斷條件 → 發彙整通知。
-    target_intervals: INTERVALS 的子集，例如只傳 15m 或只傳 1h。
+    target_intervals: INTERVALS 的子集（通常為 config 內設定的週期）。
     """
     labels = [cfg["label"] for cfg in target_intervals]
     logger.info("開始掃描：%s", ", ".join(labels))
@@ -195,43 +193,18 @@ async def scan(target_intervals: list[dict]) -> None:
     logger.info("掃描完成")
 
 
-# 各週期的 config 快速存取
-_CFG_15M = next(c for c in INTERVALS if c["label"] == "15m")
-_CFG_1H = next(c for c in INTERVALS if c["label"] == "1h")
-_CFG_1D = next(c for c in INTERVALS if c["label"] == "1d")
-
-
-def run_15m() -> None:
-    _time.sleep(REQUEST_DELAY_SEC)
-    asyncio.run(scan([_CFG_15M]))
-
-
 def run_1h() -> None:
     _time.sleep(REQUEST_DELAY_SEC)
-    asyncio.run(scan([_CFG_1H]))
-
-
-def run_1d() -> None:
-    _time.sleep(REQUEST_DELAY_SEC)
-    asyncio.run(scan([_CFG_1D]))
+    asyncio.run(scan(INTERVALS))
 
 
 if __name__ == "__main__":
     scheduler = BlockingScheduler(timezone="Asia/Taipei")
 
-    # 15m K：每 15 分鐘整（:00, :15, :30, :45）
-    scheduler.add_job(run_15m, "cron", minute="*/15", id="job_15m")
-
-    # 1h K：每小時整點（xx:00）
     scheduler.add_job(run_1h, "cron", minute=0, id="job_1h")
 
-    # 1d K：每日 00:00
-    scheduler.add_job(run_1d, "cron", hour=0, minute=0, id="job_1d")
-
     logger.info("排程啟動（時區：Asia/Taipei）")
-    logger.info("  15m K：每 15 分鐘整")
     logger.info("  1h K：每小時整點")
-    logger.info("  1d K：每日 00:00")
     logger.info("啟動不立即播報，等待下一次排程時間...")
     logger.info("按 Ctrl+C 可安全結束程式")
 
